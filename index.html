@@ -1,34 +1,479 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Salary Tax Calculator for India, US, UK. Calculate take-home pay instantly.">
-  <title>Salary Tax Calculator 💵</title>
-  <link rel="stylesheet" href="style.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Salary Tax Calculator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8fafc;
+        }
+        .lucide {
+            display: inline-block;
+            stroke: currentColor;
+            stroke-width: 2;
+            fill: none;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+        .icon-calculator {
+            width: 2rem;
+            height: 2rem;
+        }
+        .icon-info {
+            width: 1rem;
+            height: 1rem;
+        }
+        .icon-refresh {
+            width: 1rem;
+            height: 1rem;
+        }
+    </style>
 </head>
 <body>
-  <div class="calculator-container">
-    <h1>Salary Tax Calculator 💵</h1>
 
-    <label for="country">Select Country:</label>
-    <select id="country">
-      <option value="india">India 🇮🇳</option>
-      <option value="us">United States 🇺🇸</option>
-      <option value="uk">United Kingdom 🇬🇧</option>
-    </select>
+    <div id="root"></div>
 
-    <label for="salary">Enter Annual Salary:</label>
-    <input type="number" id="salary" placeholder="e.g., 500000">
+    <script type="text/babel">
+        // Helper to render Lucide icons from a sprite
+        const Icon = ({ name, className }) => {
+            const size = {
+                'icon-calculator': '2rem',
+                'icon-info': '1rem',
+                'icon-refresh': '1rem'
+            }[className] || '1.5rem';
 
-    <button id="calculateBtn">Calculate</button>
+            return (
+                <svg className={`lucide ${className}`} width={size} height={size}>
+                    <use href={`https://cdn.jsdelivr.net/npm/lucide-static@latest/sprite.svg#${name}`} />
+                </svg>
+            );
+        };
 
-    <div class="results" id="results">
-      <h2>Take-Home Salary Breakdown</h2>
-      <div id="breakdown"></div>
-    </div>
-  </div>
+        const { useState, useMemo, useEffect } = React;
 
-  <script src="script.js"></script>
+        // Define types for better code clarity
+        const FilingStatusUS = {
+            SINGLE: "single",
+            MARRIED: "married"
+        };
+
+        const CountryKey = {
+            INDIA_NEW: "india-new",
+            INDIA_OLD: "india-old",
+            US: "us",
+            UK: "uk"
+        };
+
+        // ----------------------
+        // Tax Configurations with Live Data (as of 2024-25)
+        // ----------------------
+        // Data sourced from publicly available government websites for 2024-25 fiscal year.
+        const taxConfigs = {
+            [CountryKey.INDIA_NEW]: {
+                currency: "₹",
+                countryLabel: "India – New Regime",
+                notes: "Tax slabs for the 2024-25 fiscal year. Standard deduction of ₹50,000 for salaried individuals is included.",
+                defaults: { standardDeduction: 50000, otherDeductions: 0 },
+                bands: () => [
+                    { upto: 300000, rate: 0 },
+                    { upto: 600000, rate: 0.05 },
+                    { upto: 900000, rate: 0.10 },
+                    { upto: 1200000, rate: 0.15 },
+                    { upto: 1500000, rate: 0.20 },
+                    { upto: null, rate: 0.30 },
+                ],
+            },
+            [CountryKey.INDIA_OLD]: {
+                currency: "₹",
+                countryLabel: "India – Old Regime",
+                notes: "Tax slabs for the 2024-25 fiscal year. Enter your 80C/80D etc. into 'Other deductions'.",
+                defaults: { standardDeduction: 50000, otherDeductions: 0 },
+                bands: () => [
+                    { upto: 250000, rate: 0 },
+                    { upto: 500000, rate: 0.05 },
+                    { upto: 1000000, rate: 0.20 },
+                    { upto: null, rate: 0.30 },
+                ],
+            },
+            [CountryKey.US]: {
+                currency: "$",
+                countryLabel: "United States – Federal",
+                notes: "Simplified 2024 federal tax brackets. Add state taxes separately if needed.",
+                defaults: { standardDeduction: 0, otherDeductions: 0 },
+                defaultParams: { filing: FilingStatusUS.SINGLE, includeFICA: true },
+                bands: (p) => {
+                    const filing = p?.filing ?? FilingStatusUS.SINGLE;
+                    return filing === FilingStatusUS.MARRIED
+                        ? [
+                            { upto: 23200, rate: 0.1 },
+                            { upto: 94300, rate: 0.12 },
+                            { upto: 201050, rate: 0.22 },
+                            { upto: 383900, rate: 0.24 },
+                            { upto: 487450, rate: 0.32 },
+                            { upto: 731200, rate: 0.35 },
+                            { upto: null, rate: 0.37 },
+                          ]
+                        : [
+                            { upto: 11600, rate: 0.1 },
+                            { upto: 47150, rate: 0.12 },
+                            { upto: 100525, rate: 0.22 },
+                            { upto: 191950, rate: 0.24 },
+                            { upto: 243725, rate: 0.32 },
+                            { upto: 609350, rate: 0.35 },
+                            { upto: null, rate: 0.37 },
+                          ];
+                },
+                extras: (taxable, gross, p) => {
+                    const items = [];
+                    if (p?.includeFICA) {
+                        const ssWageCap = 168600;
+                        const socialSecurity = Math.min(gross, ssWageCap) * 0.062;
+                        const medicare = gross * 0.0145;
+                        items.push({ label: "Social Security (6.2%)", amount: socialSecurity });
+                        items.push({ label: "Medicare (1.45%)", amount: medicare });
+                    }
+                    return items;
+                },
+                ParamsUI: ({ params, setParams }) => (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
+                        <div>
+                            <label className="text-sm font-medium text-slate-700">Filing Status</label>
+                            <select
+                                value={params.filing}
+                                onChange={(e) => setParams({ ...params, filing: e.target.value })}
+                                className="w-full mt-2 rounded-xl h-12 border border-slate-300 p-2 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                            >
+                                <option value={FilingStatusUS.SINGLE}>Single</option>
+                                <option value={FilingStatusUS.MARRIED}>Married Filing Jointly</option>
+                            </select>
+                        </div>
+                        <div className="flex items-center gap-3 self-end pb-1">
+                            <input
+                                type="checkbox"
+                                checked={params.includeFICA}
+                                onChange={(e) => setParams({ ...params, includeFICA: e.target.checked })}
+                                className="h-5 w-5 rounded-md text-emerald-600 focus:ring-emerald-500"
+                            />
+                            <span className="text-sm font-medium text-slate-700">Include FICA</span>
+                        </div>
+                    </div>
+                ),
+            },
+            [CountryKey.UK]: {
+                currency: "£",
+                countryLabel: "United Kingdom (rUK)",
+                notes: "Simplified 2024-25 Income Tax + optional NI (not Scotland). Personal Allowance of £12,570.",
+                defaults: { standardDeduction: 0, otherDeductions: 0 },
+                defaultParams: { includeNI: true, personalAllowance: 12570 },
+                bands: (p) => [
+                    { upto: p?.personalAllowance ?? 12570, rate: 0 },
+                    { upto: 50270, rate: 0.20 },
+                    { upto: 125140, rate: 0.40 },
+                    { upto: null, rate: 0.45 },
+                ],
+                extras: (taxable, gross, p) => {
+                    const items = [];
+                    if (p?.includeNI) {
+                        const primaryThreshold = 12570;
+                        const upperEarningsLimit = 50270;
+                        const niLower = Math.max(0, Math.min(gross, upperEarningsLimit) - primaryThreshold) * 0.08;
+                        const niUpper = Math.max(0, gross - upperEarningsLimit) * 0.02;
+                        items.push({ label: "National Insurance", amount: niLower + niUpper });
+                    }
+                    return items;
+                },
+                ParamsUI: ({ params, setParams }) => (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
+                        <div>
+                            <label className="text-sm font-medium text-slate-700">Personal Allowance</label>
+                            <input
+                                type="number"
+                                value={params.personalAllowance}
+                                onChange={(e) => setParams({ ...params, personalAllowance: Number(e.target.value || 0) })}
+                                className="w-full mt-2 rounded-xl h-12 border border-slate-300 p-2 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                            />
+                        </div>
+                        <div className="flex items-center gap-3 self-end pb-1">
+                            <input
+                                type="checkbox"
+                                checked={params.includeNI}
+                                onChange={(e) => setParams({ ...params, includeNI: e.target.checked })}
+                                className="h-5 w-5 rounded-md text-emerald-600 focus:ring-emerald-500"
+                            />
+                            <span className="text-sm font-medium text-slate-700">Include NI</span>
+                        </div>
+                    </div>
+                ),
+            },
+        };
+
+        // ----------------------
+        // Helper Functions
+        // ----------------------
+        function calcProgressiveTax(income, bands) {
+            let remaining = Math.max(0, income);
+            let lastCap = 0;
+            let total = 0;
+            const slices = [];
+            for (const band of bands) {
+                const cap = band.upto ?? Infinity;
+                const sliceAmount = Math.max(0, Math.min(remaining, cap - lastCap));
+                const sliceTax = sliceAmount * band.rate;
+                if (sliceAmount > 0) {
+                    slices.push({ amount: sliceAmount, rate: band.rate, tax: sliceTax });
+                    total += sliceTax;
+                    remaining -= sliceAmount;
+                    lastCap = cap;
+                }
+                if (remaining <= 0) break;
+            }
+            return { tax: total, slices };
+        }
+
+        function formatCurrency(n, currency) {
+            let isoCode;
+            switch (currency) {
+                case "₹": isoCode = "INR"; break;
+                case "$": isoCode = "USD"; break;
+                case "£": isoCode = "GBP"; break;
+                default: isoCode = "USD";
+            }
+            return new Intl.NumberFormat("en-US", { style: "currency", currency: isoCode }).format(n);
+        }
+
+        // ----------------------
+        // UI Components
+        // ----------------------
+        function Row({ label, value, emphasize = false, good = false }) {
+            return (
+                <div className="flex items-center justify-between">
+                    <span className={`text-slate-600 ${emphasize ? 'font-semibold text-lg' : ''}`}>{label}</span>
+                    <span className={`tabular-nums font-semibold ${emphasize ? 'text-slate-900 text-lg' : good ? 'text-emerald-600' : 'text-slate-800'}`}>{value}</span>
+                </div>
+            );
+        }
+
+        function BadgeStat({ label, value }) {
+            return (
+                <div className="bg-slate-50 rounded-xl p-3 border border-slate-200">
+                    <div className="text-slate-500 text-[11px] font-medium">{label}</div>
+                    <div className="font-bold text-lg">{value}</div>
+                </div>
+            );
+        }
+
+        function App() {
+            const [country, setCountry] = useState(CountryKey.INDIA_NEW);
+            const cfg = taxConfigs[country];
+
+            const [amount, setAmount] = useState(1200000);
+            const [period, setPeriod] = useState("annual");
+            const [standardDeduction, setStandardDeduction] = useState(cfg.defaults.standardDeduction);
+            const [otherDeductions, setOtherDeductions] = useState(cfg.defaults.otherDeductions);
+            const [params, setParams] = useState(cfg.defaultParams ?? {});
+
+            useEffect(() => {
+                const newConfig = taxConfigs[country];
+                setStandardDeduction(newConfig.defaults.standardDeduction);
+                setOtherDeductions(newConfig.defaults.otherDeductions);
+                setParams(newConfig.defaultParams ?? {});
+            }, [country]);
+
+            const grossAnnual = useMemo(() => (period === "annual" ? amount : amount * 12), [amount, period]);
+            const deductions = useMemo(() => Math.max(0, standardDeduction + otherDeductions), [standardDeduction, otherDeductions]);
+            const taxableBase = useMemo(() => Math.max(0, grossAnnual - deductions), [grossAnnual, deductions]);
+
+            const { tax: incomeTax, slices } = useMemo(() => {
+                const bands = cfg.bands(params);
+                return calcProgressiveTax(taxableBase, bands);
+            }, [taxableBase, cfg, params]);
+
+            const extras = useMemo(() => (cfg.extras ? cfg.extras(taxableBase, grossAnnual, params) : []), [cfg, taxableBase, grossAnnual, params]);
+            const extraTotal = useMemo(() => extras.reduce((a, b) => a + b.amount, 0), [extras]);
+
+            const totalTax = useMemo(() => incomeTax + extraTotal, [incomeTax, extraTotal]);
+            const netAnnual = useMemo(() => Math.max(0, grossAnnual - totalTax), [grossAnnual, totalTax]);
+
+            const toDisplay = (n) => (period === "annual" ? n : n / 12);
+            const marginalRate = slices.length ? slices[slices.length - 1].rate : 0;
+            const effRate = grossAnnual > 0 ? totalTax / grossAnnual : 0;
+
+            const handleReset = () => {
+                setAmount(1200000);
+                setStandardDeduction(cfg.defaults.standardDeduction);
+                setOtherDeductions(cfg.defaults.otherDeductions);
+                setParams(cfg.defaultParams ?? {});
+            };
+
+            const handleSliderChange = (e) => {
+                setAmount(Number(e.target.value));
+            };
+
+            return (
+                <div className="min-h-screen w-full bg-slate-50 font-sans text-slate-900 p-4 md:p-8">
+                    <div className="mx-auto max-w-5xl">
+                        <div className="mb-2 flex items-center gap-3 text-3xl font-extrabold tracking-tight text-slate-800 md:text-4xl">
+                            <Icon name="Calculator" className="icon-calculator text-emerald-600" />
+                            Salary Tax Calculator
+                        </div>
+                        <p className="mb-6 max-w-lg text-slate-600">
+                            A tool for estimating your take-home pay with the latest tax rates for India, the US, and the UK.
+                        </p>
+
+                        <div className="rounded-2xl border border-slate-200 bg-white shadow-xl">
+                            <div className="p-4 md:p-8">
+                                <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+                                    {/* Input & Controls Section */}
+                                    <div className="space-y-6">
+                                        <div>
+                                            <label className="text-sm font-medium text-slate-700">Country / Regime</label>
+                                            <select
+                                                value={country}
+                                                onChange={(e) => setCountry(e.target.value)}
+                                                className="mt-2 h-12 w-full rounded-xl border border-slate-300 p-2 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500"
+                                            >
+                                                {Object.values(CountryKey).map((key) => (
+                                                    <option key={key} value={key}>{taxConfigs[key].countryLabel}</option>
+                                                ))}
+                                            </select>
+                                            {cfg.ParamsUI && <cfg.ParamsUI params={params} setParams={setParams} />}
+                                        </div>
+
+                                        <div>
+                                            <label className="text-sm font-medium text-slate-700">Gross Salary ({cfg.currency})</label>
+                                            <input
+                                                type="number"
+                                                value={amount}
+                                                onChange={(e) => setAmount(Number(e.target.value || 0))}
+                                                className="mt-2 h-12 w-full rounded-xl border border-slate-300 p-2 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500"
+                                            />
+                                            <div className="px-2 pt-4">
+                                                <input
+                                                    type="range"
+                                                    value={Math.min(amount, 5000000)}
+                                                    min="0"
+                                                    max="5000000"
+                                                    step="1000"
+                                                    onChange={handleSliderChange}
+                                                    className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer"
+                                                />
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <label className="text-sm font-medium text-slate-700">Deductions ({cfg.currency})</label>
+                                            <div className="mt-2 grid grid-cols-2 gap-4">
+                                                <input
+                                                    type="number"
+                                                    placeholder="Standard"
+                                                    value={standardDeduction}
+                                                    onChange={(e) => setStandardDeduction(Number(e.target.value || 0))}
+                                                    className="h-12 rounded-xl border border-slate-300 p-2"
+                                                />
+                                                <input
+                                                    type="number"
+                                                    placeholder="Other"
+                                                    value={otherDeductions}
+                                                    onChange={(e) => setOtherDeductions(Number(e.target.value || 0))}
+                                                    className="h-12 rounded-xl border border-slate-300 p-2"
+                                                />
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <button
+                                                    onClick={handleReset}
+                                                    className="flex h-12 items-center justify-center rounded-xl border border-slate-300 bg-white text-slate-600 transition-colors hover:bg-slate-100"
+                                                >
+                                                    <Icon name="RefreshCw" className="icon-refresh mr-2" /> Reset
+                                                </button>
+                                                <div className="relative h-12 w-full rounded-xl bg-slate-200 p-1">
+                                                    <button
+                                                        onClick={() => setPeriod("annual")}
+                                                        className={`h-full w-1/2 rounded-lg font-medium transition-colors ${period === "annual" ? "bg-emerald-500 text-white" : "text-slate-800"}`}
+                                                    >
+                                                        Annual
+                                                    </button>
+                                                    <button
+                                                        onClick={() => setPeriod("monthly")}
+                                                        className={`h-full w-1/2 rounded-lg font-medium transition-colors ${period === "monthly" ? "bg-emerald-500 text-white" : "text-slate-800"}`}
+                                                    >
+                                                        Monthly
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            {cfg.notes && (
+                                                <div className="flex items-start gap-2 pt-4 text-xs text-slate-500">
+                                                    <Icon name="Info" className="icon-info mt-0.5" />
+                                                    <span>{cfg.notes}</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* Summary and Breakdown Sections */}
+                                    <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:col-span-2 lg:mt-0">
+                                        <div className="h-full rounded-2xl border border-slate-200 bg-white">
+                                            <div className="p-6">
+                                                <h3 className="mb-4 text-xl font-bold">Summary</h3>
+                                                <div className="space-y-4">
+                                                    <Row label="Gross Salary" value={formatCurrency(toDisplay(grossAnnual), cfg.currency)} />
+                                                    <Row label="Total Deductions" value={formatCurrency(toDisplay(deductions), cfg.currency)} />
+                                                    <Row label="Taxable Income" value={formatCurrency(toDisplay(taxableBase), cfg.currency)} />
+                                                    <Row label="Income Tax" value={formatCurrency(toDisplay(incomeTax), cfg.currency)} />
+                                                    {extras.map((ex, idx) => (
+                                                        <Row key={idx} label={ex.label} value={formatCurrency(toDisplay(ex.amount), cfg.currency)} />
+                                                    ))}
+                                                    <div className="my-4 h-px bg-slate-200" />
+                                                    <Row label="Total Tax" value={formatCurrency(toDisplay(totalTax), cfg.currency)} emphasize />
+                                                    <Row label="Net Take‑Home" value={formatCurrency(toDisplay(netAnnual), cfg.currency)} emphasize good />
+                                                    <div className="grid grid-cols-2 gap-4 pt-4">
+                                                        <BadgeStat label="Effective Rate" value={(effRate * 100).toFixed(1) + "%"} />
+                                                        <BadgeStat label="Marginal Rate" value={(marginalRate * 100).toFixed(1) + "%"} />
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className="h-full rounded-2xl border border-slate-200 bg-white">
+                                            <div className="p-6">
+                                                <h3 className="mb-4 text-xl font-bold">Tax Band Breakdown</h3>
+                                                <div className="space-y-3">
+                                                    {slices.length === 0 && (
+                                                        <p className="text-sm text-slate-500">No taxable income in this bracket yet.</p>
+                                                    )}
+                                                    {slices.map((s, i) => (
+                                                        <div key={i} className="flex items-center justify-between rounded-xl bg-slate-100 p-3 text-sm">
+                                                            <span className="font-medium text-slate-700">Taxed @ {(s.rate * 100).toFixed(0)}%</span>
+                                                            <span className="tabular-nums font-semibold text-slate-800">
+                                                                {formatCurrency(toDisplay(s.amount), cfg.currency)} → {formatCurrency(toDisplay(s.tax), cfg.currency)}
+                                                            </span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <footer className="mt-8 text-center text-sm text-slate-500">
+                            This calculator is for guidance only. Please verify rates against official tax authority publications before making financial decisions.
+                        </footer>
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
 </body>
 </html>
